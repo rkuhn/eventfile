@@ -1,0 +1,9 @@
+[package]
+name = "eventfile"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+derive_more = "0.99.17"
+memmap2 = "0.5.3"
+thiserror = "1.0.31"
