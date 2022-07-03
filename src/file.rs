@@ -1,8 +1,14 @@
-use crate::error::{ErrCtx, Result};
+use crate::{
+    error::{ErrCtx, Result},
+    formats::FileHeader,
+    io::write_all_vectored,
+    Error,
+};
 use memmap2::Mmap;
 use std::{
     fs::File,
-    io::{IoSlice, Write},
+    io::{Read, Write},
+    mem::size_of,
     ops::Range,
     path::PathBuf,
 };
@@ -47,10 +53,10 @@ impl<T: ?Sized> std::fmt::Debug for EventFrameIo<T> {
             .finish()
     }
 }
-const HEADER_LEN: usize = 6;
+const FRAME_HEADER_LEN: usize = 6;
 impl EventFrameIo<()> {
     pub fn header(sig_len: usize, data_len: usize) -> Self {
-        let total = HEADER_LEN + sig_len + data_len;
+        let total = FRAME_HEADER_LEN + sig_len + data_len;
         let pad = (!total + 1) & 3;
         let len = total + pad;
         Self {
@@ -71,10 +77,10 @@ impl<T: ?Sized> EventFrameIo<T> {
         self.sig_len_pad.padding()
     }
     pub fn slice_len(&self) -> usize {
-        self.len() - self.padding() - HEADER_LEN
+        self.len() - self.padding() - FRAME_HEADER_LEN
     }
     pub fn header_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, HEADER_LEN) }
+        unsafe { std::slice::from_raw_parts(self as *const Self as *const u8, FRAME_HEADER_LEN) }
     }
 }
 impl EventFrameIo<[u8]> {
@@ -106,39 +112,100 @@ impl<'a> EventFrame<'a> {
 pub struct EventFile {
     file: File,
     path: PathBuf,
+    offset: u64,
+    len: u64,
 }
 
+/// offset: u64
+const FILE_HEADER_LEN: usize = size_of::<u64>();
+
 impl EventFile {
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn open(path: impl Into<PathBuf>, expected_offset: u64) -> Result<Self> {
         let path = path.into();
-        let file = File::options()
+        let mut file = File::options()
             .create(true)
             .append(true)
             .read(true)
             .open(&*path)
             .ctx(&*path)?;
-        Ok(Self { file, path })
+        let len = file.metadata().ctx(&*path)?.len();
+        if len < (FILE_HEADER_LEN as u64) {
+            let mut ret = Self {
+                file,
+                path,
+                offset: expected_offset,
+                len: 0,
+            };
+            ret.write_header()?;
+            Ok(ret)
+        } else {
+            let mut buf = [0u8; FILE_HEADER_LEN];
+            file.read_exact(&mut buf).ctx(&*path)?;
+            let offset = u64::from_be_bytes(buf);
+            if offset != expected_offset {
+                return Err(Error::WrongOffset {
+                    expected: expected_offset,
+                    found: offset,
+                });
+            }
+            Ok(Self {
+                file,
+                path,
+                offset: expected_offset,
+                len: len - FILE_HEADER_LEN as u64,
+            })
+        }
     }
+
+    fn write_header(&mut self) -> Result<()> {
+        self.file.set_len(0).ctx(&*self.path)?;
+        let header = FileHeader::new(self.offset);
+        self.file.write_all(header.as_slice()).ctx(&*self.path)?;
+        Ok(())
+    }
+
     pub fn append(&mut self, frame: EventFrame<'_>) -> Result<()> {
         let header = EventFrameIo::header(frame.signature.len(), frame.data.len());
         let padding = [0u8; 4];
-        let bufs = vec![
-            IoSlice::new(header.header_slice()),
-            IoSlice::new(frame.signature),
-            IoSlice::new(frame.data),
-            IoSlice::new(&padding[..header.padding()]),
+        let bufs = [
+            header.header_slice(),
+            frame.signature,
+            frame.data,
+            &padding[..header.padding()],
         ];
-        self.file.write_vectored(&*bufs).ctx(&*self.path)?;
+        self.len += bufs.iter().map(|x| x.len() as u64).sum::<u64>();
+        write_all_vectored(&mut self.file, bufs).ctx(&*self.path)?;
         Ok(())
     }
+
     pub fn sync(&mut self) -> Result<()> {
         self.file.sync_data().ctx(&*self.path)?;
         Ok(())
     }
+
+    pub fn offset(&self) -> u64 {
+        self.offset
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn iter(&self) -> Result<EventFileIter> {
         let mmap = unsafe { Mmap::map(&self.file) }.ctx(&*self.path)?;
         let Range { start: pos, end } = mmap.as_ptr_range();
         Ok(EventFileIter { mmap, pos, end })
+    }
+
+    pub fn truncate(&mut self, new_offset: u64) -> Result<()> {
+        self.len = 0;
+        self.offset = new_offset;
+        self.write_header()?;
+        Ok(())
     }
 }
 
