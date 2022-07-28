@@ -1,22 +1,24 @@
 #![allow(unused)]
 
+use crate::u32_to_usize;
 use core::{
     mem::{align_of, size_of},
     slice::from_raw_parts,
 };
 
 macro_rules! decl {
-    ($(struct $name:ident { $($field:ident: $tpe:ty,)+ } = ($size:literal, $align:literal);)+) => {
+    ($(struct $name:ident { $($(#[$a:meta])*$field:ident: $tpe:ty,)+ } = ($size:literal, $align:literal);)+) => {
         $(
             #[repr(C)]
             pub struct $name {
-                $($field: $tpe,)+
+                $($(#[$a])* $field: $tpe,)+
             }
             impl $name {
                 pub fn new($($field:$tpe,)+) -> Self {
                     Self { $($field: $field.to_be(),)+ }
                 }
                 $(
+                    $(#[$a])*
                     pub fn $field(&self) -> $tpe {
                         <$tpe>::from_be(self.$field)
                     }
@@ -34,6 +36,18 @@ macro_rules! decl {
                 pub fn from_ptr(ptr: *const u8) -> *const Self {
                     ptr as *const Self
                 }
+                pub const fn size() -> u8 {
+                    let s = size_of::<Self>();
+                    debug_assert!(s < 256);
+                    s as u8
+                }
+            }
+            impl ::std::fmt::Debug for $name {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    f.debug_struct(stringify!($name))
+                    $(.field(stringify!($field), &self.$field()))+
+                    .finish()
+                }
             }
         )+
 
@@ -48,22 +62,35 @@ macro_rules! decl {
 }
 
 decl! {
+
+    // compressed tree file
+
     struct StreamHeader {
+        /// version magic value
         stream_version: u32,
+        /// user-defined version for stream payload data format
         user_version: u32,
+        /// offset of the first stored block relative to stream start
         offset: u64,
     } = (16, 8);
 
     struct BlockHeader {
+        /// total length of this block including header and trailer
         length: u32,
+        /// hierarchy level of this block
         level: u32,
+        /// stream offset of the previous block of same or higher level
         previous: u64,
     } = (16, 8);
 
     struct BlockTrailer {
+        /// number of padding bytes appended to the compressed payload
         padding: u8,
+        /// total length of this block including header and trailer
         length: u32,
     } = (8, 4);
+
+    // uncompressed events file
 
     struct FileHeader {
         offset: u64,
@@ -71,14 +98,14 @@ decl! {
 }
 
 impl BlockHeader {
-    pub fn len(&self) -> usize {
-        self.length() as usize
-    }
     pub fn data(&self) -> &[u8] {
         let trailer = unsafe {
-            &*BlockTrailer::from_ptr(self.as_ptr().add(self.len() - size_of::<BlockTrailer>()))
+            &*BlockTrailer::from_ptr(
+                self.as_ptr()
+                    .add(u32_to_usize(self.length()) - size_of::<BlockTrailer>()),
+            )
         };
-        let len = self.len()
+        let len = u32_to_usize(self.length())
             - size_of::<Self>()
             - usize::from(trailer.padding())
             - size_of::<BlockTrailer>();
@@ -97,4 +124,7 @@ fn align() {
     assert_eq!(size_of::<StreamHeader>() & 7, 0);
     assert_eq!(size_of::<BlockHeader>() & 7, 0);
     assert_eq!(size_of::<BlockTrailer>() & 7, 0);
+
+    // needed in reading files
+    assert!(size_of::<BlockTrailer>() < size_of::<StreamHeader>());
 }

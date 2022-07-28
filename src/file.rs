@@ -2,7 +2,7 @@ use crate::{
     error::{ErrCtx, Result},
     formats::FileHeader,
     io::write_all_vectored,
-    Error,
+    usize_to_u64, Error,
 };
 use memmap2::Mmap;
 use std::{
@@ -11,6 +11,7 @@ use std::{
     mem::size_of,
     ops::Range,
     path::PathBuf,
+    sync::Arc,
 };
 
 #[repr(transparent)]
@@ -48,8 +49,10 @@ struct EventFrameIo<T: ?Sized> {
 impl<T: ?Sized> std::fmt::Debug for EventFrameIo<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EventFrameIo")
+            .field("at", &(self as *const _))
             .field("len", &self.len())
-            .field("sig_len_pad", &self.sig_len_pad)
+            .field("sig", &self.sig_len())
+            .field("pad", &self.padding())
             .finish()
     }
 }
@@ -86,6 +89,7 @@ impl<T: ?Sized> EventFrameIo<T> {
 impl EventFrameIo<[u8]> {
     pub fn at(ptr: *const u8) -> *const Self {
         let no_data = unsafe { &*(ptr as *const EventFrameIo<()>) };
+        tracing::trace!("EventFrame @ {:?}", no_data);
         let data_len = no_data.slice_len();
         let data = unsafe { std::slice::from_raw_parts(ptr, data_len) };
         data as *const [u8] as *const EventFrameIo<[u8]>
@@ -122,6 +126,7 @@ const FILE_HEADER_LEN: usize = size_of::<u64>();
 impl EventFile {
     pub fn open(path: impl Into<PathBuf>, expected_offset: u64) -> Result<Self> {
         let path = path.into();
+        tracing::debug!(path = %path.display(), "EventFile::open");
         let mut file = File::options()
             .create(true)
             .append(true)
@@ -158,6 +163,7 @@ impl EventFile {
     }
 
     fn write_header(&mut self) -> Result<()> {
+        tracing::trace!(path = %self.path.display(), "EventFile::write_header");
         self.file.set_len(0).ctx(&*self.path)?;
         let header = FileHeader::new(self.offset);
         self.file.write_all(header.as_slice()).ctx(&*self.path)?;
@@ -173,12 +179,14 @@ impl EventFile {
             frame.data,
             &padding[..header.padding()],
         ];
-        self.len += bufs.iter().map(|x| x.len() as u64).sum::<u64>();
+        tracing::trace!(sig=%frame.signature.len(), data=%frame.data.len(), padding=header.padding(), "uncompressed");
+        self.len += bufs.iter().map(|x| usize_to_u64(x.len())).sum::<u64>();
         write_all_vectored(&mut self.file, bufs).ctx(&*self.path)?;
         Ok(())
     }
 
     pub fn sync(&mut self) -> Result<()> {
+        tracing::trace!(path = %self.path.display(), "EventFile::sync");
         self.file.sync_data().ctx(&*self.path)?;
         Ok(())
     }
@@ -196,12 +204,18 @@ impl EventFile {
     }
 
     pub fn iter(&self) -> Result<EventFileIter> {
-        let mmap = unsafe { Mmap::map(&self.file) }.ctx(&*self.path)?;
-        let Range { start: pos, end } = mmap.as_ptr_range();
+        let mmap = Arc::new(unsafe { Mmap::map(&self.file) }.ctx(&*self.path)?);
+        let Range {
+            start: mut pos,
+            end,
+        } = mmap.as_ptr_range();
+        pos = unsafe { pos.add(FILE_HEADER_LEN) };
+        tracing::trace!(pos=?pos, end=?end, path=%self.path.display(), "EventFile::iter");
         Ok(EventFileIter { mmap, pos, end })
     }
 
     pub fn truncate(&mut self, new_offset: u64) -> Result<()> {
+        tracing::debug!(offset = new_offset, "truncating");
         self.len = 0;
         self.offset = new_offset;
         self.write_header()?;
@@ -209,10 +223,11 @@ impl EventFile {
     }
 }
 
+#[derive(Clone)]
 pub struct EventFileIter {
     #[allow(dead_code)]
     // this keeps the mapping alive while we iterate
-    mmap: Mmap,
+    mmap: Arc<Mmap>,
     pos: *const u8,
     end: *const u8,
 }

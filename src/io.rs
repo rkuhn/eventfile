@@ -24,7 +24,7 @@ pub fn write_all_vectored<const N: usize>(
                 ));
             }
             Ok(n) => advance_slices(&mut bufs, n),
-            Err(ref e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
     }

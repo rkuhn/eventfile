@@ -6,7 +6,24 @@ edition = "2021"
 [dependencies]
 derive_more = "0.99.17"
 ed25519-dalek = "1.0.1"
+fbr_cache = { version = "0.1.1", optional = true }
 memmap2 = "0.5.3"
+parking_lot = { version = "0.12.1", optional = true }
 smallvec = "1.9.0"
 thiserror = "1.0.31"
+tracing = "0.1.35"
 zstd = "0.11.2"
+
+[features]
+fbr = ["dep:fbr_cache"]
+pl = ["dep:parking_lot"]
+
+[dev-dependencies]
+cbor-data = "0.8.3"
+rand = "0.8.5"
+tempfile = "3.3.0"
+tracing-subscriber = { version = "0.3.14", features = ["env-filter"] }
+
+[[test]]
+name = "smoke"
+required-features = ["fbr"]

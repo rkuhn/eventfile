@@ -21,6 +21,13 @@ pub enum Error {
     #[error("numeric overflow when {0}")]
     #[from(ignore)]
     NumericOverflow(&'static str),
+    #[error("data corruption: {message} ({found} <> {expected})")]
+    #[from(ignore)]
+    DataCorruption {
+        message: &'static str,
+        found: u64,
+        expected: u64,
+    },
 }
 impl From<(&Path, std::io::Error)> for Error {
     fn from(pair: (&Path, std::io::Error)) -> Self {
