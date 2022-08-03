@@ -1,5 +1,5 @@
 use crate::{
-    error::{ErrCtx, Result},
+    error::{ErrCtx, Fallible},
     formats::FileHeader,
     io::write_all_vectored,
     usize_to_u64, Error,
@@ -124,7 +124,7 @@ pub struct EventFile {
 const FILE_HEADER_LEN: usize = size_of::<u64>();
 
 impl EventFile {
-    pub fn open(path: impl Into<PathBuf>, expected_offset: u64) -> Result<Self> {
+    pub fn open(path: impl Into<PathBuf>, expected_offset: u64) -> Fallible<Self> {
         let path = path.into();
         tracing::debug!(path = %path.display(), "EventFile::open");
         let mut file = File::options()
@@ -162,7 +162,7 @@ impl EventFile {
         }
     }
 
-    fn write_header(&mut self) -> Result<()> {
+    fn write_header(&mut self) -> Fallible<()> {
         tracing::trace!(path = %self.path.display(), "EventFile::write_header");
         self.file.set_len(0).ctx(&*self.path)?;
         let header = FileHeader::new(self.offset);
@@ -170,7 +170,7 @@ impl EventFile {
         Ok(())
     }
 
-    pub fn append(&mut self, frame: EventFrame<'_>) -> Result<()> {
+    pub fn append(&mut self, frame: EventFrame<'_>) -> Fallible<()> {
         let header = EventFrameIo::header(frame.signature.len(), frame.data.len());
         let padding = [0u8; 4];
         let bufs = [
@@ -185,7 +185,7 @@ impl EventFile {
         Ok(())
     }
 
-    pub fn sync(&mut self) -> Result<()> {
+    pub fn sync(&mut self) -> Fallible<()> {
         tracing::trace!(path = %self.path.display(), "EventFile::sync");
         self.file.sync_data().ctx(&*self.path)?;
         Ok(())
@@ -203,7 +203,7 @@ impl EventFile {
         self.len == 0
     }
 
-    pub fn iter(&self) -> Result<EventFileIter> {
+    pub fn iter(&self) -> Fallible<EventFileIter> {
         let mmap = Arc::new(unsafe { Mmap::map(&self.file) }.ctx(&*self.path)?);
         let Range {
             start: mut pos,
@@ -214,7 +214,7 @@ impl EventFile {
         Ok(EventFileIter { mmap, pos, end })
     }
 
-    pub fn truncate(&mut self, new_offset: u64) -> Result<()> {
+    pub fn truncate(&mut self, new_offset: u64) -> Fallible<()> {
         tracing::debug!(offset = new_offset, "truncating");
         self.len = 0;
         self.offset = new_offset;

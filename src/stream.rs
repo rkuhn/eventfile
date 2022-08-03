@@ -1,6 +1,6 @@
 use crate::{
     cache::Cache,
-    error::{ErrCtx, Result},
+    error::{ErrCtx, Fallible},
     formats::{BlockHeader, BlockTrailer, StreamHeader},
     io::write_all_vectored,
     isize_to_u64, u32_to_usize, u8_to_u32, u8_to_usize, usize_to_u64, Error, EventFile,
@@ -116,7 +116,7 @@ impl Stream {
         config: StreamConfig,
         path: impl Into<PathBuf>,
         version: u32,
-    ) -> Result<Self> {
+    ) -> Fallible<Self> {
         let path: PathBuf = path.into();
         let _span = tracing::debug_span!("init", path = %path.display(), id).entered();
         let mut main = File::options()
@@ -218,7 +218,7 @@ impl Stream {
         self.user_version
     }
 
-    pub fn append(&mut self, frame: EventFrame<'_>) -> Result<()> {
+    pub fn append(&mut self, frame: EventFrame<'_>) -> Fallible<()> {
         let _span =
             tracing::trace_span!("append", id = %self.id, last = ?self.last_header).entered();
         self.uncompressed.append(frame)?;
@@ -258,10 +258,10 @@ impl Stream {
         &mut self,
         selector: F1,
         extractor: F2,
-    ) -> Result<StreamIter<'_, F1, F2, T>>
+    ) -> Fallible<StreamIter<'_, F1, F2, T>>
     where
-        F1: FnMut(NodeType, &[u8]) -> Result<SmallVec<[u32; FANOUT]>>,
-        F2: FnMut(&[u8]) -> Result<T>,
+        F1: FnMut(NodeType, &[u8]) -> Fallible<SmallVec<[u32; FANOUT]>>,
+        F2: FnMut(&[u8]) -> Fallible<T>,
     {
         StreamIter::new(self, selector, extractor)
     }
@@ -306,7 +306,7 @@ impl Stream {
         }
     }
 
-    fn advance_mmap_last_header(&mut self) -> Result<()> {
+    fn advance_mmap_last_header(&mut self) -> Fallible<()> {
         self.mmap = unsafe { Mmap::map(&self.main) }.ctx(&*self.path)?;
         if let Some(lh) = self.last_header.as_mut() {
             *lh = unsafe {
@@ -323,7 +323,7 @@ impl Stream {
         Ok(())
     }
 
-    fn write_level_zero(&mut self) -> Result<()> {
+    fn write_level_zero(&mut self) -> Fallible<()> {
         let _span = tracing::trace_span!("write", level=%0u32).entered();
 
         let index = (self.config.summarise_leaf)(self.uncompressed.iter()?);
@@ -374,7 +374,7 @@ impl Stream {
         &self,
         blocks: [&BlockHeader; FANOUT],
         level: u32,
-    ) -> Result<(BlockHeader, Vec<u8>, u32, BlockTrailer)> {
+    ) -> Fallible<(BlockHeader, Vec<u8>, u32, BlockTrailer)> {
         let _span = tracing::trace_span!("write", level).entered();
 
         let mut decompressed = blocks.map(|d| self.decompress(d, level > 1));
@@ -407,7 +407,7 @@ impl Stream {
         Ok((header, payload, padding, trailer))
     }
 
-    fn decompress(&self, header: &BlockHeader, prio: bool) -> Result<Arc<[u8]>> {
+    fn decompress(&self, header: &BlockHeader, prio: bool) -> Fallible<Arc<[u8]>> {
         let key = (self.id, self.block_offset(header));
         let bytes = self.config.cache.borrow_mut().get(key);
         if let Some(bytes) = bytes {
@@ -452,7 +452,7 @@ impl<'a> Iterator for SearchIter<'a> {
     }
 }
 
-struct LeafIter<F: FnMut(&[u8]) -> Result<T>, T> {
+struct LeafIter<F: FnMut(&[u8]) -> Fallible<T>, T> {
     extractor: Rc<RefCell<F>>,
     block: Arc<[u8]>,
     pos: usize,
@@ -460,8 +460,8 @@ struct LeafIter<F: FnMut(&[u8]) -> Result<T>, T> {
     selected: SmallVec<[u32; FANOUT]>,
 }
 
-impl<F: FnMut(&[u8]) -> Result<T>, T> Iterator for LeafIter<F, T> {
-    type Item = Result<T>;
+impl<F: FnMut(&[u8]) -> Fallible<T>, T> Iterator for LeafIter<F, T> {
+    type Item = Fallible<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.block.len() {
@@ -517,8 +517,8 @@ struct UncompressedIter<F> {
     idx: u32,
 }
 
-impl<F: FnMut(&[u8]) -> Result<T>, T> Iterator for UncompressedIter<F> {
-    type Item = Result<T>;
+impl<F: FnMut(&[u8]) -> Fallible<T>, T> Iterator for UncompressedIter<F> {
+    type Item = Fallible<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self
@@ -543,7 +543,7 @@ impl<F: FnMut(&[u8]) -> Result<T>, T> Iterator for UncompressedIter<F> {
 
 enum StreamIterState<'a, F1, F2, T>
 where
-    F2: FnMut(&[u8]) -> Result<T>,
+    F2: FnMut(&[u8]) -> Fallible<T>,
 {
     NotStarted,
     Branch(Box<StreamIter<'a, F1, F2, T>>),
@@ -554,7 +554,7 @@ where
 
 pub struct StreamIter<'a, F1, F2, T>
 where
-    F2: FnMut(&[u8]) -> Result<T>,
+    F2: FnMut(&[u8]) -> Fallible<T>,
 {
     stream: &'a Stream,
     selector: Rc<RefCell<F1>>,
@@ -566,9 +566,9 @@ where
 
 impl<'a, F1, F2, T> StreamIter<'a, F1, F2, T>
 where
-    F2: FnMut(&[u8]) -> Result<T>,
+    F2: FnMut(&[u8]) -> Fallible<T>,
 {
-    pub fn new(stream: &'a mut Stream, selector: F1, extractor: F2) -> Result<Self> {
+    pub fn new(stream: &'a mut Stream, selector: F1, extractor: F2) -> Fallible<Self> {
         let _span = tracing::trace_span!("StreamIter::new", id = stream.id).entered();
         let uncompressed = stream.uncompressed.iter()?;
         let index = if let Some(index) = &stream.uncompressed_index {
@@ -603,10 +603,10 @@ macro_rules! handle_err {
 
 impl<'a, F1, F2, T> Iterator for StreamIter<'a, F1, F2, T>
 where
-    F1: FnMut(NodeType, &[u8]) -> Result<SmallVec<[u32; FANOUT]>>,
-    F2: Fn(&[u8]) -> Result<T>,
+    F1: FnMut(NodeType, &[u8]) -> Fallible<SmallVec<[u32; FANOUT]>>,
+    F2: Fn(&[u8]) -> Fallible<T>,
 {
-    type Item = Result<T>;
+    type Item = Fallible<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         use StreamIterState::Failed;

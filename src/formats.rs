@@ -6,10 +6,21 @@ use core::{
     slice::from_raw_parts,
 };
 
+pub trait HasMagic: Sized {
+    const MAGIC: &'static [u8; 8];
+    const SIZE: u64;
+    const LEN: usize;
+}
+
 macro_rules! decl {
-    ($(struct $name:ident { $($(#[$a:meta])*$field:ident: $tpe:ty,)+ } = ($size:literal, $align:literal);)+) => {
+    ($(
+        struct $name:ident / $lifted:ident {
+            $($(#[$a:meta])*$field:ident$(/$set:ident)?: $tpe:ty,)+
+        } = ($size:literal, $align:literal$(, $magic:literal)?);
+    )+) => {
         $(
             #[repr(C)]
+            #[derive(Clone, Copy)]
             pub struct $name {
                 $($(#[$a])* $field: $tpe,)+
             }
@@ -22,6 +33,11 @@ macro_rules! decl {
                     pub fn $field(&self) -> $tpe {
                         <$tpe>::from_be(self.$field)
                     }
+                    $(
+                        pub fn $set(&mut self, value: $tpe) {
+                            self.$field = value.to_be();
+                        }
+                    )?
                 )+
                 pub fn as_slice(&self) -> &[u8] {
                     unsafe { from_raw_parts(self as *const _ as *const u8, size_of::<Self>()) }
@@ -36,17 +52,39 @@ macro_rules! decl {
                 pub fn from_ptr(ptr: *const u8) -> *const Self {
                     ptr as *const Self
                 }
-                pub const fn size() -> u8 {
-                    let s = size_of::<Self>();
-                    debug_assert!(s < 256);
-                    s as u8
-                }
             }
             impl ::std::fmt::Debug for $name {
                 fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                     f.debug_struct(stringify!($name))
                     $(.field(stringify!($field), &self.$field()))+
                     .finish()
+                }
+            }
+            $(
+                impl $crate::formats::HasMagic for $name {
+                    const MAGIC: &'static [u8; 8] = $magic;
+                    const LEN: usize = {
+                        let size = size_of::<$name>() + $magic.len();
+                        if size > u8::MAX as usize { panic!("HasMagic size must fit into u8") }
+                        size
+                    };
+                    const SIZE: u64 = crate::usize_to_u64(Self::LEN);
+                }
+            )?
+            #[derive(Clone, Copy)]
+            pub struct $lifted {
+                $($(#[$a])* pub $field: $tpe,)+
+            }
+            impl $name {
+                pub fn lift(&self) -> $lifted {
+                    $lifted {
+                        $($field: self.$field(),)+
+                    }
+                }
+            }
+            impl From<$lifted> for $name {
+                fn from(l: $lifted) -> Self {
+                    Self::new($(l.$field),+)
                 }
             }
         )+
@@ -56,6 +94,7 @@ macro_rules! decl {
             $(
                 assert_eq!(size_of::<$name>(), $size);
                 assert_eq!(align_of::<$name>(), $align);
+                assert!($align <= 8);
             )+
         }
     };
@@ -63,68 +102,59 @@ macro_rules! decl {
 
 decl! {
 
-    // compressed tree file
-
-    struct StreamHeader {
+    struct MmapFileHeader / MmapFileHeaderLifted {
         /// version magic value
         stream_version: u32,
         /// user-defined version for stream payload data format
         user_version: u32,
-        /// offset of the first stored block relative to stream start
-        offset: u64,
-    } = (16, 8);
+        /// offset of the first stored byte relative to stream start
+        start_offset: u64,
+        /// offset of the first byte beyond the stored stream
+        end_offset / set_end_offset: u64,
+    } = (16, 8, b"Events01");
 
-    struct BlockHeader {
-        /// total length of this block including header and trailer
-        length: u32,
-        /// hierarchy level of this block
+    struct BlockHeader / BlockHeaderLifted {
+        /// stream offset of immediately preceding block (-1 for None)
+        prev_block: u64,
+        /// level or this block
         level: u32,
-        /// stream offset of the previous block of same or higher level
-        previous: u64,
+        /// length of this block’s payload excluding padding
+        length: u32,
+    } = (24, 8, b"BlockSta");
+
+    struct LeafHeader / LeafHeaderLifted {
+        /// index of first event in this block
+        start_idx: u64,
+        /// number of events in this block
+        count: u32,
     } = (16, 8);
 
-    struct BlockTrailer {
-        /// number of padding bytes appended to the compressed payload
-        padding: u8,
-        /// total length of this block including header and trailer
-        length: u32,
-    } = (8, 4);
+    struct BranchHeader / BranchHeaderLifted {
+        /// offset of the previous index block of level same or higher (-1 for None)
+        prev_offset: u64,
+        /// exclusive upper bound on event indices in this block
+        end_idx: u64,
+    } = (8, 8, b"BranchHd");
 
-    // uncompressed events file
-
-    struct FileHeader {
+    struct IndexEntry / IndexEntryLifted {
         offset: u64,
-    } = (8, 8);
-}
+        start_idx: u64,
+    } = (16, 8);
 
-impl BlockHeader {
-    pub fn data(&self) -> &[u8] {
-        let trailer = unsafe {
-            &*BlockTrailer::from_ptr(
-                self.as_ptr()
-                    .add(u32_to_usize(self.length()) - size_of::<BlockTrailer>()),
-            )
-        };
-        let len = u32_to_usize(self.length())
-            - size_of::<Self>()
-            - usize::from(trailer.padding())
-            - size_of::<BlockTrailer>();
-        let data = unsafe { self.as_ptr().add(size_of::<Self>()) };
-        unsafe { from_raw_parts(data, len) }
-    }
+    struct StagingHeader / StagingHeaderLifted {
+        /// stream offset of the preceding compressed block’s header
+        last_block: u64,
+        /// index number of the first stored event
+        start_idx: u64,
+        /// number of events stored
+        count / set_count: u32,
+        /// number of event index slots allocated
+        capacity: u32,
+    } = (16, 8, b"Staging!");
+
 }
 
 #[test]
 fn align() {
-    // assert that alignment is at most eight bytes
-    assert_eq!(align_of::<StreamHeader>() & !15, 0);
-    assert_eq!(align_of::<BlockHeader>() & !15, 0);
-    assert_eq!(align_of::<BlockTrailer>() & !15, 0);
-    // assert that size is multiple of eight bytes
-    assert_eq!(size_of::<StreamHeader>() & 7, 0);
-    assert_eq!(size_of::<BlockHeader>() & 7, 0);
-    assert_eq!(size_of::<BlockTrailer>() & 7, 0);
-
-    // needed in reading files
-    assert!(size_of::<BlockTrailer>() < size_of::<StreamHeader>());
+    assert_eq!(MmapFileHeader::SIZE, 32);
 }

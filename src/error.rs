@@ -28,6 +28,15 @@ pub enum Error {
         found: u64,
         expected: u64,
     },
+    #[error("data not present: {message} (desired at {offset}, boundary at {boundary})")]
+    #[from(ignore)]
+    DataNotPresent {
+        message: &'static str,
+        offset: u64,
+        boundary: u64,
+    },
+    #[error("attempt to write beyond end of file")]
+    WriteBeyondEnd,
 }
 impl From<(&Path, std::io::Error)> for Error {
     fn from(pair: (&Path, std::io::Error)) -> Self {
@@ -53,4 +62,4 @@ impl<O, E> ErrCtx for std::result::Result<O, E> {
         self.map_err(|e| (t, e))
     }
 }
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Fallible<T> = std::result::Result<T, Error>;
