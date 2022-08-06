@@ -7,7 +7,7 @@ use core::{
 };
 
 pub trait HasMagic: Sized {
-    const MAGIC: &'static [u8; 8];
+    const MAGIC: &'static [u8];
     const SIZE: u64;
     const LEN: usize;
 }
@@ -62,7 +62,10 @@ macro_rules! decl {
             }
             $(
                 impl $crate::formats::HasMagic for $name {
-                    const MAGIC: &'static [u8; 8] = $magic;
+                    const MAGIC: &'static [u8] = {
+                        if $magic.len() & 7 != 0 { panic!("MAGIC length must be multiple of eight bytes") }
+                        $magic
+                    };
                     const LEN: usize = {
                         let size = size_of::<$name>() + $magic.len();
                         if size > u8::MAX as usize { panic!("HasMagic size must fit into u8") }
@@ -111,7 +114,7 @@ decl! {
         start_offset: u64,
         /// offset of the first byte beyond the stored stream
         end_offset / set_end_offset: u64,
-    } = (16, 8, b"Events01");
+    } = (24, 8, b"Events01");
 
     struct BlockHeader / BlockHeaderLifted {
         /// stream offset of immediately preceding block (-1 for None)
@@ -120,26 +123,26 @@ decl! {
         level: u32,
         /// length of this block’s payload excluding padding
         length: u32,
-    } = (24, 8, b"BlockSta");
+    } = (16, 8, b"BlockSta");
 
     struct LeafHeader / LeafHeaderLifted {
         /// index of first event in this block
         start_idx: u64,
         /// number of events in this block
         count: u32,
-    } = (16, 8);
+    } = (16, 8, b"LeafHead");
 
     struct BranchHeader / BranchHeaderLifted {
         /// offset of the previous index block of level same or higher (-1 for None)
         prev_offset: u64,
         /// exclusive upper bound on event indices in this block
         end_idx: u64,
-    } = (8, 8, b"BranchHd");
+    } = (16, 8, b"BranchHd");
 
     struct IndexEntry / IndexEntryLifted {
         offset: u64,
         start_idx: u64,
-    } = (16, 8);
+    } = (16, 8, b"");
 
     struct StagingHeader / StagingHeaderLifted {
         /// stream offset of the preceding compressed block’s header
@@ -150,7 +153,7 @@ decl! {
         count / set_count: u32,
         /// number of event index slots allocated
         capacity: u32,
-    } = (16, 8, b"Staging!");
+    } = (24, 8, b"Staging!");
 
 }
 

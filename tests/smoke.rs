@@ -18,9 +18,7 @@ where
     L: RangeBounds<T>,
 {
     let min = match left.start_bound() {
-        std::ops::Bound::Included(left) => {
-            Bound::Included(left.as_ref().max(right.start().as_ref()))
-        }
+        std::ops::Bound::Included(left) => Bound::Included(left.as_ref().max(right.start().as_ref())),
         std::ops::Bound::Excluded(left) => {
             if left.as_ref() >= right.start().as_ref() {
                 Bound::Excluded(left.as_ref())
@@ -95,29 +93,15 @@ fn setup() -> (TempDir, Box<dyn Cache>) {
 }
 
 fn get_str<'a>(cbor: &'a Cbor, path: &str) -> Cow<'a, str> {
-    cbor.index_borrowed(index_str(path))
-        .unwrap()
-        .decode()
-        .to_str()
-        .unwrap()
+    cbor.index_borrowed(index_str(path)).unwrap().decode().to_str().unwrap()
 }
 
 fn get_bytes<'a>(cbor: &'a Cbor, path: &str) -> Cow<'a, [u8]> {
-    cbor.index_borrowed(index_str(path))
-        .unwrap()
-        .decode()
-        .to_bytes()
-        .unwrap()
+    cbor.index_borrowed(index_str(path)).unwrap().decode().to_bytes().unwrap()
 }
 
 fn get_u64(cbor: &Cbor, path: &str) -> u64 {
-    match cbor
-        .index_borrowed(index_str(path))
-        .unwrap()
-        .decode()
-        .as_number()
-        .unwrap()
-    {
+    match cbor.index_borrowed(index_str(path)).unwrap().decode().as_number().unwrap() {
         cbor_data::value::Number::Int(x) => *x as u64,
         _ => panic!("not a u64"),
     }
@@ -237,9 +221,7 @@ fn select<'a>(
     }
 }
 
-fn select_byte(
-    range: impl RangeBounds<u8>,
-) -> impl FnMut(NodeType, &[u8]) -> Result<SmallVec<[u32; FANOUT]>, Error> {
+fn select_byte(range: impl RangeBounds<u8>) -> impl FnMut(NodeType, &[u8]) -> Result<SmallVec<[u32; FANOUT]>, Error> {
     move |nt, idx| match nt {
         NodeType::Branch => Ok(Cbor::checked(idx)
             .unwrap()
@@ -285,8 +267,7 @@ fn extractor(bytes: &[u8]) -> Result<String, Error> {
 fn smoke() {
     let (dir, cache) = setup();
 
-    let config =
-        StreamConfig::new(summarise_leaf, summarise_index, cache).compression_threshold(1000);
+    let config = StreamConfig::new(summarise_leaf, summarise_index, cache).compression_threshold(1000);
     let mut s = Stream::new(13, config, dir.path().join("1234"), 42).unwrap();
 
     let mut all = vec![];
@@ -303,11 +284,7 @@ fn smoke() {
         all.push(i.to_string());
     }
 
-    let evs = s
-        .iter(select(..), extractor)
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect::<Vec<_>>();
+    let evs = s.iter(select(..), extractor).unwrap().map(|r| r.unwrap()).collect::<Vec<_>>();
     assert_eq!(evs, all);
 
     for i in 0..9 {
@@ -320,24 +297,12 @@ fn smoke() {
             .collect::<Vec<_>>();
         assert_eq!(
             evs,
-            all.iter()
-                .filter(|s| s.starts_with(lower.as_str()))
-                .cloned()
-                .collect::<Vec<_>>()
+            all.iter().filter(|s| s.starts_with(lower.as_str())).cloned().collect::<Vec<_>>()
         );
     }
 
     for b in 0..=255u8 {
-        let evs = s
-            .iter(select_byte(b..=b), extractor)
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            evs,
-            per_byte.get(&b).cloned().unwrap_or_default(),
-            "b={}",
-            b
-        );
+        let evs = s.iter(select_byte(b..=b), extractor).unwrap().map(|r| r.unwrap()).collect::<Vec<_>>();
+        assert_eq!(evs, per_byte.get(&b).cloned().unwrap_or_default(), "b={}", b);
     }
 }

@@ -27,3 +27,7 @@ tracing-subscriber = { version = "0.3.14", features = ["env-filter"] }
 [[test]]
 name = "smoke"
 required-features = ["fbr"]
+
+[[example]]
+name = "example"
+required-features = ["fbr"]

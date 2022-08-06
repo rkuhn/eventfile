@@ -1,12 +1,21 @@
-use eventfile::{Error, EventFile, EventFrame};
+use eventfile::{Error, EventFile};
+use tempfile::tempdir;
 
 fn main() -> Result<(), Error> {
-    let mut f = EventFile::open("file", 0)?;
-    f.append(EventFrame::new(b"12345", b"abcd"))?;
-    f.append(EventFrame::new(b"a12345", b"abcd567"))?;
-    f.append(EventFrame::new(b".12345", b"abcddfghd"))?;
-    for ev in &mut f.iter()? {
-        println!("sig: {} data: {}", ev.signature.len(), ev.data.len());
-    }
+    let dir = tempdir().map_err(|e| ("tempdir", e))?;
+    let mut f = EventFile::new(1, dir.path().join("file"), 0, 20, 20, Box::new(fbr_cache::FbrCache::new(1000)))?;
+    f.dump_text(2, std::io::stdout()).unwrap();
+    f.append(b"abcd")?;
+    println!("***");
+    f.dump_text(2, std::io::stdout()).unwrap();
+    f.append(b"hello world!")?;
+    println!("***");
+    f.dump_text(2, std::io::stdout()).unwrap();
+    f.append("Crazy Stüff".as_bytes())?;
+    println!("***");
+    f.dump_text(2, std::io::stdout()).unwrap();
+    f.append(b"0123456789")?;
+    println!("***");
+    f.dump_text(2, std::io::stdout()).unwrap();
     Ok(())
 }
