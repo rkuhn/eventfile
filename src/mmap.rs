@@ -74,7 +74,7 @@ impl MmapFile {
     }
 
     fn validate_range<T: HasMagic>(&self, offset: usize) -> Fallible<()> {
-        if offset & 7 != 0 {
+        if offset & (align_of::<T>() - 1) != 0 {
             return Err(Error::data_corruption("alignment error", usize_to_u64(offset), 0));
         }
         let end = offset + T::LEN;
@@ -119,25 +119,6 @@ impl MmapFile {
         Ok(())
     }
 
-    fn mut_no_magic<T>(&mut self, offset: usize) -> Fallible<&mut T> {
-        if offset & (align_of::<T>() - 1) != 0 {
-            return Err(Error::data_corruption(
-                "alignment error",
-                usize_to_u64(offset),
-                usize_to_u64(align_of::<T>()),
-            ));
-        }
-        let end = offset + size_of::<T>();
-        if end > self.mmap.len() {
-            return Err(Error::data_corruption(
-                "writing beyond end of file",
-                usize_to_u64(end),
-                usize_to_u64(self.mmap.len()),
-            ));
-        }
-        Ok(unsafe { &mut *(self.mmap.as_ptr().add(offset) as *mut T) })
-    }
-
     fn write(&mut self, offset: usize, bytes: &[u8]) -> Fallible<()> {
         let end = offset + bytes.len();
         if end > self.mmap.len() {
@@ -164,21 +145,6 @@ impl MmapFile {
             ));
         }
         self.at((offset - self.start_offset + 4096) as usize)
-    }
-
-    pub fn stream_at_no_magic<T>(&self, offset: u64) -> Fallible<&T> {
-        if offset < self.start_offset {
-            return Err(Error::data_not_present("index before start offset", offset, self.start_offset));
-        }
-        let end = offset + usize_to_u64(size_of::<T>());
-        if end > self.end_offset {
-            return Err(Error::data_not_present(
-                "object reaching beyond end offset",
-                offset,
-                self.end_offset,
-            ));
-        }
-        Ok(unsafe { &*(self.mmap.as_ptr().add((offset - self.start_offset + 4096) as usize) as *const T) })
     }
 
     pub fn stream_offset<T: HasMagic>(&self, at: &T) -> Fallible<u64> {
@@ -308,10 +274,6 @@ impl MmapFile {
     pub fn staging_put<T: HasMagic>(&mut self, offset: usize, value: T) -> Fallible<()> {
         self.put(self.staging_start() + offset, value)?;
         Ok(())
-    }
-
-    pub fn staging_mut_no_magic<T>(&mut self, offset: usize) -> Fallible<&mut T> {
-        self.mut_no_magic(self.staging_start() + offset)
     }
 
     pub fn staging_write(&mut self, offset: usize, bytes: &[u8]) -> Fallible<()> {

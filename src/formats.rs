@@ -144,6 +144,10 @@ decl! {
         start_idx: u64,
     } = (16, 8, b"");
 
+    struct JumpEntry / JumpEntryLifted {
+        pos: u32,
+    } = (4, 4, b"");
+
     struct StagingHeader / StagingHeaderLifted {
         /// stream offset of the preceding compressed block’s header
         last_block: u64,
