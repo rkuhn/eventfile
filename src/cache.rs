@@ -5,6 +5,16 @@ pub trait Cache {
     fn get(&mut self, key: (u32, u64)) -> Option<Arc<[u8]>>;
 }
 
+pub struct NoCache;
+
+impl Cache for NoCache {
+    fn put(&mut self, _key: (u32, u64), _value: Arc<[u8]>, _prio: bool) {}
+
+    fn get(&mut self, _key: (u32, u64)) -> Option<Arc<[u8]>> {
+        None
+    }
+}
+
 impl<T: Cache> Cache for Arc<Mutex<T>> {
     fn put(&mut self, key: (u32, u64), value: Arc<[u8]>, prio: bool) {
         self.lock().unwrap().put(key, value, prio);

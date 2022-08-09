@@ -17,6 +17,7 @@ zstd = "0.11.2"
 [features]
 fbr = ["dep:fbr_cache"]
 pl = ["dep:parking_lot"]
+native = []
 
 [dev-dependencies]
 cbor-data = "0.8.3"

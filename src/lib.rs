@@ -5,7 +5,7 @@ mod formats;
 mod iter;
 mod mmap;
 
-pub use cache::Cache;
+pub use cache::{Cache, NoCache};
 pub use error::Error;
 pub use iter::{LeafIter, LeafSlice, RangeIter};
 
@@ -18,6 +18,36 @@ use mmap::MmapFile;
 use smallvec::SmallVec;
 use std::{cell::RefCell, io::Write, mem::size_of_val, ops::RangeBounds, path::PathBuf, slice};
 
+pub struct EventFileConfig {
+    user_version: u32,
+    compression_threshold: usize,
+    block_event_limit: u32,
+    cache: Box<dyn Cache>,
+}
+
+impl EventFileConfig {
+    pub fn new(user_version: u32) -> Self {
+        Self {
+            user_version,
+            compression_threshold: 100000,
+            block_event_limit: 20000,
+            cache: Box::new(NoCache),
+        }
+    }
+
+    pub fn compression_threshold(self, compression_threshold: usize) -> Self {
+        Self { compression_threshold, ..self }
+    }
+
+    pub fn block_event_limit(self, block_event_limit: u32) -> Self {
+        Self { block_event_limit, ..self }
+    }
+
+    pub fn cache(self, cache: Box<dyn Cache>) -> Self {
+        Self { cache, ..self }
+    }
+}
+
 pub struct EventFile {
     file: MmapFile,
     id: u32,
@@ -27,10 +57,13 @@ pub struct EventFile {
 }
 
 impl EventFile {
-    pub fn new(
-        id: u32, path: PathBuf, user_version: u32, compression_threshold: usize, block_event_limit: u32,
-        cache: Box<dyn Cache>,
-    ) -> Fallible<Self> {
+    pub fn new(id: u32, path: PathBuf, config: EventFileConfig) -> Fallible<Self> {
+        let EventFileConfig {
+            user_version,
+            compression_threshold,
+            block_event_limit,
+            cache,
+        } = config;
         let mut ret = Self {
             file: MmapFile::new(path, user_version)?,
             id,

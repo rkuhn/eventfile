@@ -24,6 +24,7 @@ macro_rules! decl {
             pub struct $name {
                 $($(#[$a])* $field: $tpe,)+
             }
+            #[cfg(not(feature = "native"))]
             impl $name {
                 pub fn new($($field:$tpe,)+) -> Self {
                     Self { $($field: $field.to_be(),)+ }
@@ -39,6 +40,25 @@ macro_rules! decl {
                         }
                     )?
                 )+
+            }
+            #[cfg(feature = "native")]
+            impl $name {
+                pub fn new($($field:$tpe,)+) -> Self {
+                    Self { $($field,)+ }
+                }
+                $(
+                    $(#[$a])*
+                    pub fn $field(&self) -> $tpe {
+                        self.$field
+                    }
+                    $(
+                        pub fn $set(&mut self, value: $tpe) {
+                            self.$field = value;
+                        }
+                    )?
+                )+
+            }
+            impl $name {
                 pub fn as_slice(&self) -> &[u8] {
                     unsafe { from_raw_parts(self as *const _ as *const u8, size_of::<Self>()) }
                 }
